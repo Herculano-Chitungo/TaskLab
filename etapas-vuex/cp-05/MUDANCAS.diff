@@ -1,0 +1,141 @@
+--- cp-04/src/components/TaskItem.vue
++++ cp-05/src/components/TaskItem.vue
+@@ -12,5 +12,6 @@
+       @change="$emit('alternar', tarefa.id)"
+     />
+     <label :for="`t-${tarefa.id}`" :class="{ feita: tarefa.concluida }">{{ tarefa.titulo }}</label>
++    <RouterLink :to="{ name: 'tarefa', params: { id: tarefa.id } }">Detalhes</RouterLink>
+   </li>
+ </template>
+--- cp-04/src/router/index.js
++++ cp-05/src/router/index.js
+@@ -1,11 +1,14 @@
+ import { createRouter, createWebHistory } from 'vue-router'
+ import ListaView from '../views/ListaView.vue'
+ import ResumoView from '../views/ResumoView.vue'
++import TarefaView from '../views/TarefaView.vue'
+ import NaoEncontradaView from '../views/NaoEncontradaView.vue'
+ 
+ const routes = [
+   { path: '/', name: 'lista', component: ListaView },
+   { path: '/resumo', name: 'resumo', component: ResumoView },
++  // (\\d+) só aceita números: /tarefa/abc cai na rota 404
++  { path: '/tarefa/:id(\\d+)', name: 'tarefa', component: TarefaView, props: true },
+   { path: '/:pathMatch(.*)*', name: 'nao-encontrada', component: NaoEncontradaView }
+ ]
+ 
+--- cp-04/src/store/index.js
++++ cp-05/src/store/index.js
+@@ -3,7 +3,7 @@
+ 
+ // Plugin: observa as mutations e salva a lista quando ela muda
+ const persistir = (store) => {
+-  const QUE_SALVAM = ['ADICIONAR', 'ALTERNAR']
++  const QUE_SALVAM = ['ADICIONAR', 'ALTERNAR', 'EDITAR', 'REMOVER']
+   store.subscribe((mutacao, state) => {
+     if (QUE_SALVAM.includes(mutacao.type)) salvar(state.tarefas)
+   })
+@@ -23,7 +23,8 @@
+     pendentes: (state) => state.tarefas.filter((t) => !t.concluida),
+     concluidas: (state) => state.tarefas.filter((t) => t.concluida),
+     totalPendentes: (_state, getters) => getters.pendentes.length,
+-    totalConcluidas: (_state, getters) => getters.concluidas.length
++    totalConcluidas: (_state, getters) => getters.concluidas.length,
++    porId: (state) => (id) => state.tarefas.find((t) => t.id === id)
+   },
+ 
+   mutations: {
+@@ -37,6 +38,13 @@
+     ALTERNAR(state, id) {
+       const tarefa = state.tarefas.find((t) => t.id === id)
+       if (tarefa) tarefa.concluida = !tarefa.concluida
++    },
++    EDITAR(state, { id, titulo }) {
++      const tarefa = state.tarefas.find((t) => t.id === id)
++      if (tarefa) tarefa.titulo = titulo
++    },
++    REMOVER(state, id) {
++      state.tarefas = state.tarefas.filter((t) => t.id !== id)
+     },
+     DEFINIR_CARREGANDO(state, valor) {
+       state.carregando = valor
+@@ -67,6 +75,15 @@
+ 
+     alternar({ commit }, id) {
+       commit('ALTERNAR', id)
++    },
++
++    editar({ commit }, { id, titulo }) {
++      const limpo = titulo.trim()
++      if (limpo) commit('EDITAR', { id, titulo: limpo })
++    },
++
++    remover({ commit }, id) {
++      commit('REMOVER', id)
+     }
+   },
+ 
+--- /dev/null
++++ cp-05/src/views/TarefaView.vue
+@@ -0,0 +1,61 @@
++<script setup>
++import { computed, ref, watch } from 'vue'
++import { useStore } from 'vuex'
++import { useRouter } from 'vue-router'
++import BasePanel from '../components/BasePanel.vue'
++
++// props: true na rota entrega o :id, sempre como TEXTO
++const props = defineProps({ id: { type: String, required: true } })
++
++const store = useStore()
++const router = useRouter()
++
++const tarefa = computed(() => store.getters.porId(Number(props.id)))
++
++// Rascunho: o que a pessoa digita só vai para a store ao salvar
++const rascunho = ref('')
++watch(
++  () => tarefa.value?.titulo,
++  (titulo) => {
++    rascunho.value = titulo ?? ''
++  },
++  { immediate: true }
++)
++
++const alterado = computed(
++  () => rascunho.value.trim() !== '' && rascunho.value.trim() !== tarefa.value?.titulo
++)
++
++function salvar() {
++  store.dispatch('editar', { id: tarefa.value.id, titulo: rascunho.value })
++}
++function cancelar() {
++  rascunho.value = tarefa.value.titulo
++}
++function remover() {
++  store.dispatch('remover', tarefa.value.id)
++  router.push({ name: 'lista' })
++}
++</script>
++
++<template>
++  <BasePanel v-if="tarefa" :titulo="`Tarefa ${tarefa.id}`">
++    <form @submit.prevent="salvar" novalidate>
++      <label for="titulo-edicao">Título</label>
++      <input id="titulo-edicao" v-model="rascunho" />
++      <button type="submit" :disabled="!alterado">Salvar</button>
++      <button type="button" @click="cancelar">Cancelar</button>
++    </form>
++
++    <p>Situação: {{ tarefa.concluida ? 'concluída' : 'pendente' }}</p>
++    <button type="button" @click="store.dispatch('alternar', tarefa.id)">Alternar situação</button>
++    <button type="button" @click="remover">Remover</button>
++
++    <p><RouterLink :to="{ name: 'lista' }">Voltar para a lista</RouterLink></p>
++  </BasePanel>
++
++  <BasePanel v-else titulo="Tarefa não encontrada">
++    <p>Essa tarefa não existe (ou foi removida).</p>
++    <RouterLink :to="{ name: 'lista' }">Voltar para a lista</RouterLink>
++  </BasePanel>
++</template>

@@ -1,0 +1,131 @@
+--- cp-02/src/App.vue
++++ cp-03/src/App.vue
+@@ -1,15 +1,27 @@
+ <script setup>
++import { onMounted } from 'vue'
++import { storeToRefs } from 'pinia'
+ import { useTarefasStore } from './stores/tarefas'
+ import TaskForm from './components/TaskForm.vue'
+ import ListaTarefas from './components/ListaTarefas.vue'
+ import ResumoTarefas from './components/ResumoTarefas.vue'
+ 
+ const store = useTarefasStore()
++const { carregando, erro } = storeToRefs(store)
++
++onMounted(() => store.carregar())
+ </script>
+ 
+ <template>
+   <h1>TaskLab</h1>
+-  <ResumoTarefas />
+-  <TaskForm @adicionar="store.adicionar" />
+-  <ListaTarefas />
++  <p v-if="carregando" role="status">Carregando tarefas…</p>
++  <div v-else-if="erro" role="alert">
++    <p>{{ erro }}</p>
++    <button type="button" @click="store.carregar()">Tentar de novo</button>
++  </div>
++  <template v-else>
++    <ResumoTarefas />
++    <TaskForm @adicionar="store.adicionar" />
++    <ListaTarefas />
++  </template>
+ </template>
+--- cp-02/src/stores/tarefas.js
++++ cp-03/src/stores/tarefas.js
+@@ -1,13 +1,13 @@
+-import { computed, ref } from 'vue'
++import { computed, ref, watch } from 'vue'
+ import { defineStore } from 'pinia'
++import { lerSalvas, salvar, semente } from '../utils/armazenamento'
+ 
+ // "Setup store": é quase o useTasks de antes, dentro de defineStore
+ export const useTarefasStore = defineStore('tarefas', () => {
+   // ----- state -----
+-  const tarefas = ref([
+-    { id: 1, titulo: 'Estudar props e eventos', concluida: true },
+-    { id: 2, titulo: 'Montar a store do TaskLab', concluida: false }
+-  ])
++  const tarefas = ref([])
++  const carregando = ref(false)
++  const erro = ref('')
+ 
+   // ----- getters -----
+   const total = computed(() => tarefas.value.length)
+@@ -15,6 +15,20 @@
+   const concluidas = computed(() => tarefas.value.filter((t) => t.concluida))
+   const totalPendentes = computed(() => pendentes.value.length)
+   const totalConcluidas = computed(() => concluidas.value.length)
++
++  // ----- actions -----
++  async function carregar() {
++    carregando.value = true
++    erro.value = ''
++    try {
++      await new Promise((resolve) => setTimeout(resolve, 400)) // simula uma API
++      tarefas.value = lerSalvas() ?? semente()
++    } catch (e) {
++      erro.value = e.message
++    } finally {
++      carregando.value = false
++    }
++  }
+ 
+   function adicionar(titulo) {
+     const limpo = titulo.trim()
+@@ -28,9 +42,12 @@
+     if (tarefa) tarefa.concluida = !tarefa.concluida
+   }
+ 
++  // ----- persistência: salva sempre que a lista muda -----
++  watch(tarefas, (lista) => salvar(lista), { deep: true })
++
+   return {
+-    tarefas,
++    tarefas, carregando, erro,
+     total, pendentes, concluidas, totalPendentes, totalConcluidas,
+-    adicionar, alternar
++    carregar, adicionar, alternar
+   }
+ })
+--- /dev/null
++++ cp-03/src/utils/armazenamento.js
+@@ -0,0 +1,38 @@
++const CHAVE = 'tasklab:tarefas'
++
++export function semente() {
++  return [
++    { id: 1, titulo: 'Estudar props e eventos', concluida: true },
++    { id: 2, titulo: 'Montar a store do TaskLab', concluida: false },
++    { id: 3, titulo: 'Configurar o Vue Router', concluida: false }
++  ]
++}
++
++export function salvar(tarefas) {
++  try {
++    localStorage.setItem(CHAVE, JSON.stringify(tarefas))
++  } catch {
++    // Armazenamento cheio ou bloqueado: o app segue funcionando sem salvar.
++  }
++}
++
++// Devolve a lista salva, ou null se não houver nada. Dados corrompidos são descartados.
++export function lerSalvas() {
++  let bruto
++  try {
++    bruto = localStorage.getItem(CHAVE)
++  } catch {
++    return null
++  }
++  if (bruto === null) return null
++  try {
++    const dados = JSON.parse(bruto)
++    if (!Array.isArray(dados)) throw new Error('formato')
++    return dados.filter(
++      (t) => t && Number.isInteger(t.id) && typeof t.titulo === 'string' && typeof t.concluida === 'boolean'
++    )
++  } catch {
++    localStorage.removeItem(CHAVE)
++    throw new Error('Os dados salvos estavam corrompidos e foram descartados.')
++  }
++}

@@ -1,0 +1,228 @@
+--- cp-03/package.json
++++ cp-04/package.json
+@@ -10,7 +10,8 @@
+   },
+   "dependencies": {
+     "pinia": "^2.3.0",
+-    "vue": "^3.5.0"
++    "vue": "^3.5.0",
++    "vue-router": "^4.5.0"
+   },
+   "devDependencies": {
+     "@vitejs/plugin-vue": "^5.2.0",
+--- cp-03/src/App.vue
++++ cp-04/src/App.vue
+@@ -2,26 +2,29 @@
+ import { onMounted } from 'vue'
+ import { storeToRefs } from 'pinia'
+ import { useTarefasStore } from './stores/tarefas'
+-import TaskForm from './components/TaskForm.vue'
+-import ListaTarefas from './components/ListaTarefas.vue'
+-import ResumoTarefas from './components/ResumoTarefas.vue'
+ 
+ const store = useTarefasStore()
+-const { carregando, erro } = storeToRefs(store)
++// storeToRefs mantém a reatividade ao desestruturar state e getters
++const { carregando, erro, totalPendentes } = storeToRefs(store)
+ 
+ onMounted(() => store.carregar())
+ </script>
+ 
+ <template>
+-  <h1>TaskLab</h1>
+-  <p v-if="carregando" role="status">Carregando tarefas…</p>
+-  <div v-else-if="erro" role="alert">
+-    <p>{{ erro }}</p>
+-    <button type="button" @click="store.carregar()">Tentar de novo</button>
+-  </div>
+-  <template v-else>
+-    <ResumoTarefas />
+-    <TaskForm @adicionar="store.adicionar" />
+-    <ListaTarefas />
+-  </template>
++  <header class="topo">
++    <h1>TaskLab</h1>
++    <nav aria-label="Principal">
++      <RouterLink :to="{ name: 'lista' }">Lista</RouterLink>
++      <RouterLink :to="{ name: 'resumo' }">Resumo ({{ totalPendentes }} pendentes)</RouterLink>
++    </nav>
++  </header>
++
++  <main>
++    <p v-if="carregando" role="status">Carregando tarefas…</p>
++    <div v-else-if="erro" role="alert">
++      <p>{{ erro }}</p>
++      <button type="button" @click="store.carregar()">Tentar de novo</button>
++    </div>
++    <RouterView v-else />
++  </main>
+ </template>
+--- /dev/null
++++ cp-04/src/components/FiltrosTarefas.vue
+@@ -0,0 +1,19 @@
++<script setup>
++import { useFiltrosUrl } from '../composables/useFiltrosUrl'
++import { FILTROS, ROTULOS } from '../utils/filtros'
++
++const { busca, filtro, aplicar } = useFiltrosUrl()
++</script>
++
++<template>
++  <div class="filtros">
++    <form @submit.prevent>
++      <label for="busca">Buscar</label>
++      <input id="busca" type="search" :value="busca" @input="aplicar({ busca: $event.target.value })" />
++      <label for="filtro">Mostrar</label>
++      <select id="filtro" :value="filtro" @change="aplicar({ filtro: $event.target.value })">
++        <option v-for="f in FILTROS" :key="f" :value="f">{{ ROTULOS[f] }}</option>
++      </select>
++    </form>
++  </div>
++</template>
+--- cp-03/src/components/ListaTarefas.vue
++++ cp-04/src/components/ListaTarefas.vue
+@@ -1,15 +1,22 @@
+ <script setup>
++import { computed } from 'vue'
+ import { storeToRefs } from 'pinia'
+ import { useTarefasStore } from '../stores/tarefas'
+ import TaskItem from './TaskItem.vue'
++import { useFiltrosUrl } from '../composables/useFiltrosUrl'
++import { aplicarFiltro } from '../utils/filtros'
+ 
+ const store = useTarefasStore()
+ const { tarefas } = storeToRefs(store)
++const { busca, filtro } = useFiltrosUrl()
++
++const visiveis = computed(() => aplicarFiltro(tarefas.value, busca.value, filtro.value))
+ </script>
+ 
+ <template>
+   <p v-if="tarefas.length === 0">Nenhuma tarefa ainda. Adicione a primeira acima.</p>
++  <p v-else-if="visiveis.length === 0">Nenhuma tarefa corresponde ao filtro.</p>
+   <ul v-else>
+-    <TaskItem v-for="t in tarefas" :key="t.id" :tarefa="t" @alternar="store.alternar" />
++    <TaskItem v-for="t in visiveis" :key="t.id" :tarefa="t" @alternar="store.alternar" />
+   </ul>
+ </template>
+--- /dev/null
++++ cp-04/src/composables/useFiltrosUrl.js
+@@ -0,0 +1,24 @@
++import { computed } from 'vue'
++import { useRoute, useRouter } from 'vue-router'
++import { filtroValido } from '../utils/filtros'
++
++// A URL é o estado dos filtros: ?busca=router&filtro=pendentes
++// Quem quiser ler ou mudar o filtro usa este composable; todos enxergam o mesmo estado.
++export function useFiltrosUrl() {
++  const route = useRoute()
++  const router = useRouter()
++
++  const busca = computed(() => (typeof route.query.busca === 'string' ? route.query.busca : ''))
++  const filtro = computed(() => filtroValido(route.query.filtro))
++
++  function aplicar(novos, { empurrar = false } = {}) {
++    const query = { ...route.query, ...novos }
++    if (!query.busca) delete query.busca
++    if (!query.filtro || query.filtro === 'todas') delete query.filtro
++    // replace enquanto digita (não enche o histórico); push quando é uma decisão (IA)
++    const navegar = empurrar ? router.push : router.replace
++    navegar.call(router, { query })
++  }
++
++  return { busca, filtro, aplicar }
++}
+--- cp-03/src/main.js
++++ cp-04/src/main.js
+@@ -1,6 +1,7 @@
+ import { createApp } from 'vue'
+ import { createPinia } from 'pinia'
+ import App from './App.vue'
++import router from './router'
+ import './style.css'
+ 
+-createApp(App).use(createPinia()).mount('#app')
++createApp(App).use(createPinia()).use(router).mount('#app')
+--- /dev/null
++++ cp-04/src/router/index.js
+@@ -0,0 +1,15 @@
++import { createRouter, createWebHistory } from 'vue-router'
++import ListaView from '../views/ListaView.vue'
++import ResumoView from '../views/ResumoView.vue'
++import NaoEncontradaView from '../views/NaoEncontradaView.vue'
++
++const routes = [
++  { path: '/', name: 'lista', component: ListaView },
++  { path: '/resumo', name: 'resumo', component: ResumoView },
++  { path: '/:pathMatch(.*)*', name: 'nao-encontrada', component: NaoEncontradaView }
++]
++
++export default createRouter({
++  history: createWebHistory(),
++  routes
++})
+--- /dev/null
++++ cp-04/src/utils/filtros.js
+@@ -0,0 +1,16 @@
++export const FILTROS = ['todas', 'pendentes', 'concluidas']
++export const ROTULOS = { todas: 'Todas', pendentes: 'Pendentes', concluidas: 'Concluídas' }
++
++// Qualquer valor fora da lista vira 'todas': a URL e a IA são entradas externas.
++export function filtroValido(valor) {
++  return FILTROS.includes(valor) ? valor : 'todas'
++}
++
++export function aplicarFiltro(tarefas, busca, filtro) {
++  const termo = busca.trim().toLowerCase()
++  return tarefas.filter((t) => {
++    if (filtro === 'pendentes' && t.concluida) return false
++    if (filtro === 'concluidas' && !t.concluida) return false
++    return !termo || t.titulo.toLowerCase().includes(termo)
++  })
++}
+--- /dev/null
++++ cp-04/src/views/ListaView.vue
+@@ -0,0 +1,17 @@
++<script setup>
++import { useTarefasStore } from '../stores/tarefas'
++import BasePanel from '../components/BasePanel.vue'
++import TaskForm from '../components/TaskForm.vue'
++import FiltrosTarefas from '../components/FiltrosTarefas.vue'
++import ListaTarefas from '../components/ListaTarefas.vue'
++
++const store = useTarefasStore()
++</script>
++
++<template>
++  <BasePanel titulo="Tarefas">
++    <TaskForm @adicionar="store.adicionar" />
++    <FiltrosTarefas />
++    <ListaTarefas />
++  </BasePanel>
++</template>
+--- /dev/null
++++ cp-04/src/views/NaoEncontradaView.vue
+@@ -0,0 +1,10 @@
++<script setup>
++import BasePanel from '../components/BasePanel.vue'
++</script>
++
++<template>
++  <BasePanel titulo="Página não encontrada">
++    <p>Esse endereço não existe.</p>
++    <RouterLink :to="{ name: 'lista' }">Voltar para a lista</RouterLink>
++  </BasePanel>
++</template>
+--- /dev/null
++++ cp-04/src/views/ResumoView.vue
+@@ -0,0 +1,10 @@
++<script setup>
++import BasePanel from '../components/BasePanel.vue'
++import ResumoTarefas from '../components/ResumoTarefas.vue'
++</script>
++
++<template>
++  <BasePanel titulo="Resumo">
++    <ResumoTarefas />
++  </BasePanel>
++</template>

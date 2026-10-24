@@ -1,0 +1,151 @@
+--- cp-02/src/App.vue
++++ cp-03/src/App.vue
+@@ -1,15 +1,27 @@
+ <script setup>
++import { computed, onMounted } from 'vue'
+ import { useStore } from 'vuex'
+ import TaskForm from './components/TaskForm.vue'
+ import ListaTarefas from './components/ListaTarefas.vue'
+ import ResumoTarefas from './components/ResumoTarefas.vue'
+ 
+ const store = useStore()
++const carregando = computed(() => store.state.carregando)
++const erro = computed(() => store.state.erro)
++
++onMounted(() => store.dispatch('carregar'))
+ </script>
+ 
+ <template>
+   <h1>TaskLab</h1>
+-  <ResumoTarefas />
+-  <TaskForm @adicionar="store.dispatch('adicionar', $event)" />
+-  <ListaTarefas />
++  <p v-if="carregando" role="status">Carregando tarefas…</p>
++  <div v-else-if="erro" role="alert">
++    <p>{{ erro }}</p>
++    <button type="button" @click="store.dispatch('carregar')">Tentar de novo</button>
++  </div>
++  <template v-else>
++    <ResumoTarefas />
++    <TaskForm @adicionar="store.dispatch('adicionar', $event)" />
++    <ListaTarefas />
++  </template>
+ </template>
+--- cp-02/src/store/index.js
++++ cp-03/src/store/index.js
+@@ -1,13 +1,21 @@
+ import { createStore } from 'vuex'
++import { lerSalvas, salvar, semente } from '../utils/armazenamento'
++
++// Plugin: observa as mutations e salva a lista quando ela muda
++const persistir = (store) => {
++  const QUE_SALVAM = ['ADICIONAR', 'ALTERNAR']
++  store.subscribe((mutacao, state) => {
++    if (QUE_SALVAM.includes(mutacao.type)) salvar(state.tarefas)
++  })
++}
+ 
+ export default createStore({
+   strict: import.meta.env.DEV, // mutar o state fora de uma mutation dá erro no console
+ 
+   state: () => ({
+-    tarefas: [
+-      { id: 1, titulo: 'Estudar props e eventos', concluida: true },
+-      { id: 2, titulo: 'Montar a store do TaskLab', concluida: false }
+-    ]
++    tarefas: [],
++    carregando: false,
++    erro: ''
+   }),
+ 
+   getters: {
+@@ -19,6 +27,9 @@
+   },
+ 
+   mutations: {
++    DEFINIR_TAREFAS(state, tarefas) {
++      state.tarefas = tarefas
++    },
+     ADICIONAR(state, titulo) {
+       const id = Math.max(0, ...state.tarefas.map((t) => t.id)) + 1
+       state.tarefas.push({ id, titulo, concluida: false })
+@@ -26,10 +37,29 @@
+     ALTERNAR(state, id) {
+       const tarefa = state.tarefas.find((t) => t.id === id)
+       if (tarefa) tarefa.concluida = !tarefa.concluida
++    },
++    DEFINIR_CARREGANDO(state, valor) {
++      state.carregando = valor
++    },
++    DEFINIR_ERRO(state, mensagem) {
++      state.erro = mensagem
+     }
+   },
+ 
+   actions: {
++    async carregar({ commit }) {
++      commit('DEFINIR_CARREGANDO', true)
++      commit('DEFINIR_ERRO', '')
++      try {
++        await new Promise((resolve) => setTimeout(resolve, 400)) // simula uma API
++        commit('DEFINIR_TAREFAS', lerSalvas() ?? semente())
++      } catch (e) {
++        commit('DEFINIR_ERRO', e.message)
++      } finally {
++        commit('DEFINIR_CARREGANDO', false)
++      }
++    },
++
+     adicionar({ commit }, titulo) {
+       const limpo = titulo.trim()
+       if (limpo) commit('ADICIONAR', limpo)
+@@ -38,5 +68,7 @@
+     alternar({ commit }, id) {
+       commit('ALTERNAR', id)
+     }
+-  }
++  },
++
++  plugins: [persistir]
+ })
+--- /dev/null
++++ cp-03/src/utils/armazenamento.js
+@@ -0,0 +1,38 @@
++const CHAVE = 'tasklab:tarefas'
++
++export function semente() {
++  return [
++    { id: 1, titulo: 'Estudar props e eventos', concluida: true },
++    { id: 2, titulo: 'Montar a store do TaskLab', concluida: false },
++    { id: 3, titulo: 'Configurar o Vue Router', concluida: false }
++  ]
++}
++
++export function salvar(tarefas) {
++  try {
++    localStorage.setItem(CHAVE, JSON.stringify(tarefas))
++  } catch {
++    // Armazenamento cheio ou bloqueado: o app segue funcionando sem salvar.
++  }
++}
++
++// Devolve a lista salva, ou null se não houver nada. Dados corrompidos são descartados.
++export function lerSalvas() {
++  let bruto
++  try {
++    bruto = localStorage.getItem(CHAVE)
++  } catch {
++    return null
++  }
++  if (bruto === null) return null
++  try {
++    const dados = JSON.parse(bruto)
++    if (!Array.isArray(dados)) throw new Error('formato')
++    return dados.filter(
++      (t) => t && Number.isInteger(t.id) && typeof t.titulo === 'string' && typeof t.concluida === 'boolean'
++    )
++  } catch {
++    localStorage.removeItem(CHAVE)
++    throw new Error('Os dados salvos estavam corrompidos e foram descartados.')
++  }
++}

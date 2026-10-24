@@ -1,0 +1,130 @@
+--- cp-04/src/components/TaskItem.vue
++++ cp-05/src/components/TaskItem.vue
+@@ -12,5 +12,6 @@
+       @change="$emit('alternar', tarefa.id)"
+     />
+     <label :for="`t-${tarefa.id}`" :class="{ feita: tarefa.concluida }">{{ tarefa.titulo }}</label>
++    <RouterLink :to="{ name: 'tarefa', params: { id: tarefa.id } }">Detalhes</RouterLink>
+   </li>
+ </template>
+--- cp-04/src/router/index.js
++++ cp-05/src/router/index.js
+@@ -1,11 +1,14 @@
+ import { createRouter, createWebHistory } from 'vue-router'
+ import ListaView from '../views/ListaView.vue'
+ import ResumoView from '../views/ResumoView.vue'
++import TarefaView from '../views/TarefaView.vue'
+ import NaoEncontradaView from '../views/NaoEncontradaView.vue'
+ 
+ const routes = [
+   { path: '/', name: 'lista', component: ListaView },
+   { path: '/resumo', name: 'resumo', component: ResumoView },
++  // (\\d+) só aceita números: /tarefa/abc cai na rota 404
++  { path: '/tarefa/:id(\\d+)', name: 'tarefa', component: TarefaView, props: true },
+   { path: '/:pathMatch(.*)*', name: 'nao-encontrada', component: NaoEncontradaView }
+ ]
+ 
+--- cp-04/src/stores/tarefas.js
++++ cp-05/src/stores/tarefas.js
+@@ -15,6 +15,7 @@
+   const concluidas = computed(() => tarefas.value.filter((t) => t.concluida))
+   const totalPendentes = computed(() => pendentes.value.length)
+   const totalConcluidas = computed(() => concluidas.value.length)
++  const porId = (id) => tarefas.value.find((t) => t.id === id)
+ 
+   // ----- actions -----
+   async function carregar() {
+@@ -38,8 +39,18 @@
+   }
+ 
+   function alternar(id) {
+-    const tarefa = tarefas.value.find((t) => t.id === id)
++    const tarefa = porId(id)
+     if (tarefa) tarefa.concluida = !tarefa.concluida
++  }
++
++  function editar({ id, titulo }) {
++    const limpo = titulo.trim()
++    const tarefa = porId(id)
++    if (tarefa && limpo) tarefa.titulo = limpo
++  }
++
++  function remover(id) {
++    tarefas.value = tarefas.value.filter((t) => t.id !== id)
+   }
+ 
+   // ----- persistência: salva sempre que a lista muda -----
+@@ -47,7 +58,7 @@
+ 
+   return {
+     tarefas, carregando, erro,
+-    total, pendentes, concluidas, totalPendentes, totalConcluidas,
+-    carregar, adicionar, alternar
++    total, pendentes, concluidas, totalPendentes, totalConcluidas, porId,
++    carregar, adicionar, alternar, editar, remover
+   }
+ })
+--- /dev/null
++++ cp-05/src/views/TarefaView.vue
+@@ -0,0 +1,61 @@
++<script setup>
++import { computed, ref, watch } from 'vue'
++import { useRouter } from 'vue-router'
++import { useTarefasStore } from '../stores/tarefas'
++import BasePanel from '../components/BasePanel.vue'
++
++// props: true na rota entrega o :id, sempre como TEXTO
++const props = defineProps({ id: { type: String, required: true } })
++
++const store = useTarefasStore()
++const router = useRouter()
++
++const tarefa = computed(() => store.porId(Number(props.id)))
++
++// Rascunho: o que a pessoa digita só vai para a store ao salvar
++const rascunho = ref('')
++watch(
++  () => tarefa.value?.titulo,
++  (titulo) => {
++    rascunho.value = titulo ?? ''
++  },
++  { immediate: true }
++)
++
++const alterado = computed(
++  () => rascunho.value.trim() !== '' && rascunho.value.trim() !== tarefa.value?.titulo
++)
++
++function salvar() {
++  store.editar({ id: tarefa.value.id, titulo: rascunho.value })
++}
++function cancelar() {
++  rascunho.value = tarefa.value.titulo
++}
++function remover() {
++  store.remover(tarefa.value.id)
++  router.push({ name: 'lista' })
++}
++</script>
++
++<template>
++  <BasePanel v-if="tarefa" :titulo="`Tarefa ${tarefa.id}`">
++    <form @submit.prevent="salvar" novalidate>
++      <label for="titulo-edicao">Título</label>
++      <input id="titulo-edicao" v-model="rascunho" />
++      <button type="submit" :disabled="!alterado">Salvar</button>
++      <button type="button" @click="cancelar">Cancelar</button>
++    </form>
++
++    <p>Situação: {{ tarefa.concluida ? 'concluída' : 'pendente' }}</p>
++    <button type="button" @click="store.alternar(tarefa.id)">Alternar situação</button>
++    <button type="button" @click="remover">Remover</button>
++
++    <p><RouterLink :to="{ name: 'lista' }">Voltar para a lista</RouterLink></p>
++  </BasePanel>
++
++  <BasePanel v-else titulo="Tarefa não encontrada">
++    <p>Essa tarefa não existe (ou foi removida).</p>
++    <RouterLink :to="{ name: 'lista' }">Voltar para a lista</RouterLink>
++  </BasePanel>
++</template>

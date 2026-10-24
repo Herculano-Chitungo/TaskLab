@@ -1,0 +1,72 @@
+--- cp-01/src/App.vue
++++ cp-02/src/App.vue
+@@ -1,24 +1,15 @@
+ <script setup>
+-import { computed } from 'vue'
+ import { useStore } from 'vuex'
+ import TaskForm from './components/TaskForm.vue'
+-import TaskItem from './components/TaskItem.vue'
++import ListaTarefas from './components/ListaTarefas.vue'
++import ResumoTarefas from './components/ResumoTarefas.vue'
+ 
+ const store = useStore()
+-const tarefas = computed(() => store.state.tarefas)
+-const pendentes = computed(() => store.getters.totalPendentes)
+ </script>
+ 
+ <template>
+   <h1>TaskLab</h1>
+-  <p>{{ pendentes }} pendentes</p>
++  <ResumoTarefas />
+   <TaskForm @adicionar="store.dispatch('adicionar', $event)" />
+-  <ul>
+-    <TaskItem
+-      v-for="t in tarefas"
+-      :key="t.id"
+-      :tarefa="t"
+-      @alternar="store.dispatch('alternar', $event)"
+-    />
+-  </ul>
++  <ListaTarefas />
+ </template>
+--- /dev/null
++++ cp-02/src/components/ListaTarefas.vue
+@@ -0,0 +1,18 @@
++<script setup>
++import { useStore } from 'vuex'
++import TaskItem from './TaskItem.vue'
++
++const store = useStore()
++</script>
++
++<template>
++  <p v-if="store.state.tarefas.length === 0">Nenhuma tarefa ainda. Adicione a primeira acima.</p>
++  <ul v-else>
++    <TaskItem
++      v-for="t in store.state.tarefas"
++      :key="t.id"
++      :tarefa="t"
++      @alternar="store.dispatch('alternar', $event)"
++    />
++  </ul>
++</template>
+--- /dev/null
++++ cp-02/src/components/ResumoTarefas.vue
+@@ -0,0 +1,17 @@
++<script setup>
++import { computed } from 'vue'
++import { useStore } from 'vuex'
++
++const store = useStore()
++const total = computed(() => store.getters.total)
++const pendentes = computed(() => store.getters.totalPendentes)
++const concluidas = computed(() => store.getters.totalConcluidas)
++</script>
++
++<template>
++  <dl class="resumo">
++    <div><dt>Total</dt><dd>{{ total }}</dd></div>
++    <div><dt>Pendentes</dt><dd>{{ pendentes }}</dd></div>
++    <div><dt>Concluídas</dt><dd>{{ concluidas }}</dd></div>
++  </dl>
++</template>

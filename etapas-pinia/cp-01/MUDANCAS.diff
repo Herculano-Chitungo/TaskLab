@@ -1,0 +1,166 @@
+--- base/package.json
++++ cp-01/package.json
+@@ -1,5 +1,5 @@
+ {
+-  "name": "tasklab-base",
++  "name": "tasklab-pinia",
+   "private": true,
+   "version": "1.0.0",
+   "type": "module",
+@@ -9,6 +9,7 @@
+     "preview": "vite preview"
+   },
+   "dependencies": {
++    "pinia": "^2.3.0",
+     "vue": "^3.5.0"
+   },
+   "devDependencies": {
+--- base/src/App.vue
++++ cp-01/src/App.vue
+@@ -1,24 +1,18 @@
+ <script setup>
++import { storeToRefs } from 'pinia'
++import { useTarefasStore } from './stores/tarefas'
+ import TaskForm from './components/TaskForm.vue'
+ import TaskItem from './components/TaskItem.vue'
+ 
+-// BLOCO 1, passo 3: esta importação e a linha que chama useTasks() mais abaixo serão trocadas pela
+-// store: useStore no Vuex ou useTarefasStore no Pinia.
+-import { useTasks } from './composables/useTasks'
+-
+-const { tarefas, pendentes, adicionar, alternar } = useTasks()
++const store = useTarefasStore()
++const { tarefas, totalPendentes } = storeToRefs(store)
+ </script>
+ 
+ <template>
+   <h1>TaskLab</h1>
+-  <p>{{ pendentes.length }} pendentes</p>
+-
+-  <!--
+-    O formulário só emite um evento. Ele não conhece a store, e isso continua assim o dia inteiro:
+-    no bloco 1 só muda quem recebe o evento.
+-  -->
+-  <TaskForm @adicionar="adicionar" />
++  <p>{{ totalPendentes }} pendentes</p>
++  <TaskForm @adicionar="store.adicionar" />
+   <ul>
+-    <TaskItem v-for="t in tarefas" :key="t.id" :tarefa="t" @alternar="alternar" />
++    <TaskItem v-for="t in tarefas" :key="t.id" :tarefa="t" @alternar="store.alternar" />
+   </ul>
+ </template>
+--- base/src/components/BasePanel.vue
++++ cp-01/src/components/BasePanel.vue
+@@ -1,7 +1,3 @@
+-<!--
+-  O BasePanel já existe desde o Sábado 2. Ele só passa a ser usado no bloco 4, nas telas (views).
+--->
+-
+ <script setup>
+ defineProps({ titulo: { type: String, default: '' } })
+ </script>
+--- base/src/components/TaskItem.vue
++++ cp-01/src/components/TaskItem.vue
+@@ -12,10 +12,5 @@
+       @change="$emit('alternar', tarefa.id)"
+     />
+     <label :for="`t-${tarefa.id}`" :class="{ feita: tarefa.concluida }">{{ tarefa.titulo }}</label>
+-
+-  <!--
+-    BLOCO 5: aqui entra o link Detalhes, um RouterLink para a tela de cada tarefa. Ele só pode
+-    existir depois que o Router for instalado, no bloco 4.
+-  -->
+   </li>
+ </template>
+--- base/src/composables/useTasks.js
++++ /dev/null
+@@ -1,28 +0,0 @@
+-// PONTO DE PARTIDA. Este é o useTasks do Sábado 2. No bloco 1 o estado das tarefas sai daqui e vai
+-// para uma store; a partir da etapa cp-01 este arquivo deixa de existir. Guarde esta versão para
+-// comparar. Repare que o estado nasce DENTRO da função: cada chamada cria uma lista nova, e esse é
+-// o problema que a store resolve.
+-
+-import { ref, computed } from 'vue'
+-
+-export function useTasks() {
+-  const tarefas = ref([
+-    { id: 1, titulo: 'Estudar props e eventos', concluida: true },
+-    { id: 2, titulo: 'Montar a store do TaskLab', concluida: false }
+-  ])
+-  const pendentes = computed(() => tarefas.value.filter((t) => !t.concluida))
+-
+-  function adicionar(titulo) {
+-    const limpo = titulo.trim()
+-    if (!limpo) return
+-    const id = Math.max(0, ...tarefas.value.map((t) => t.id)) + 1
+-    tarefas.value.push({ id, titulo: limpo, concluida: false })
+-  }
+-
+-  function alternar(id) {
+-    const t = tarefas.value.find((t) => t.id === id)
+-    if (t) t.concluida = !t.concluida
+-  }
+-
+-  return { tarefas, pendentes, adicionar, alternar }
+-}
+--- base/src/main.js
++++ cp-01/src/main.js
+@@ -1,7 +1,6 @@
+ import { createApp } from 'vue'
++import { createPinia } from 'pinia'
+ import App from './App.vue'
+ import './style.css'
+ 
+-// BLOCO 1, passo 3: aqui a store é instalada, com .use(store) no Vuex ou .use(createPinia()) no
+-// Pinia. No bloco 4 entra também o Router, com .use(router).
+-createApp(App).mount('#app')
++createApp(App).use(createPinia()).mount('#app')
+--- /dev/null
++++ cp-01/src/stores/tarefas.js
+@@ -0,0 +1,36 @@
++import { computed, ref } from 'vue'
++import { defineStore } from 'pinia'
++
++// "Setup store": é quase o useTasks de antes, dentro de defineStore
++export const useTarefasStore = defineStore('tarefas', () => {
++  // ----- state -----
++  const tarefas = ref([
++    { id: 1, titulo: 'Estudar props e eventos', concluida: true },
++    { id: 2, titulo: 'Montar a store do TaskLab', concluida: false }
++  ])
++
++  // ----- getters -----
++  const total = computed(() => tarefas.value.length)
++  const pendentes = computed(() => tarefas.value.filter((t) => !t.concluida))
++  const concluidas = computed(() => tarefas.value.filter((t) => t.concluida))
++  const totalPendentes = computed(() => pendentes.value.length)
++  const totalConcluidas = computed(() => concluidas.value.length)
++
++  function adicionar(titulo) {
++    const limpo = titulo.trim()
++    if (!limpo) return
++    const id = Math.max(0, ...tarefas.value.map((t) => t.id)) + 1
++    tarefas.value.push({ id, titulo: limpo, concluida: false })
++  }
++
++  function alternar(id) {
++    const tarefa = tarefas.value.find((t) => t.id === id)
++    if (tarefa) tarefa.concluida = !tarefa.concluida
++  }
++
++  return {
++    tarefas,
++    total, pendentes, concluidas, totalPendentes, totalConcluidas,
++    adicionar, alternar
++  }
++})
+--- base/vite.config.js
++++ cp-01/vite.config.js
+@@ -2,7 +2,5 @@
+ import vue from '@vitejs/plugin-vue'
+ 
+ export default defineConfig({
+-  // BLOCO 6: aqui entra o bloco server.proxy, que repassa tudo que começa com /api para o proxy
+-  // local da IA.
+   plugins: [vue()]
+ })

@@ -1,0 +1,225 @@
+--- cp-06/src/components/BuscaPorIA.vue
++++ /dev/null
+@@ -1,44 +0,0 @@
+-<script setup>
+-import { onUnmounted, ref } from 'vue'
+-import { useFiltrosUrl } from '../composables/useFiltrosUrl'
+-import { pedirFiltro } from '../services/ia'
+-
+-const { aplicar } = useFiltrosUrl()
+-const texto = ref('')
+-const carregando = ref(false)
+-const erro = ref('')
+-let controlador = null
+-
+-async function interpretar() {
+-  if (!texto.value) {
+-    erro.value = 'Escreva o que você quer ver.'
+-    return
+-  }
+-  controlador?.abort() // só o último pedido vale
+-  const meu = new AbortController()
+-  controlador = meu
+-  carregando.value = true
+-  erro.value = ''
+-  try {
+-    const { busca, filtro } = await pedirFiltro(texto.value, meu.signal)
+-    // A IA só preenche a URL; quem filtra continua sendo a lista.
+-    aplicar({ busca, filtro }, { empurrar: true })
+-  } catch (e) {
+-    if (e.name !== 'AbortError') erro.value = 'Não consegui interpretar o pedido.'
+-  } finally {
+-    if (controlador === meu) carregando.value = false
+-  }
+-}
+-
+-onUnmounted(() => controlador?.abort())
+-</script>
+-
+-<template>
+-  <form @submit.prevent="interpretar" novalidate>
+-    <label for="pedido-ia">Pedir em português</label>
+-    <input id="pedido-ia" v-model.trim="texto" placeholder="Ex.: só as pendentes sobre router" />
+-    <button type="submit">Filtrar com IA</button>
+-  </form>
+-  <p v-if="carregando" role="status">Interpretando…</p>
+-  <p v-else-if="erro" role="alert">{{ erro }}</p>
+-</template>
+--- /dev/null
++++ cp-06b/src/components/ComandosIA.vue
+@@ -0,0 +1,91 @@
++<script setup>
++import { computed, onUnmounted, ref } from 'vue'
++import { useStore } from 'vuex'
++import { useFiltrosUrl } from '../composables/useFiltrosUrl'
++import { pedirAcoes } from '../services/ia'
++import { descrever } from '../utils/acoes'
++
++const store = useStore()
++const { aplicar } = useFiltrosUrl()
++const tarefas = computed(() => store.state.tarefas)
++
++const texto = ref('')
++const plano = ref([]) // as ações propostas pela IA, já validadas
++const carregando = ref(false)
++const erro = ref('')
++let controlador = null
++
++// Cada ação permitida aponta para o MESMO caminho que a pessoa usaria na tela.
++const EXECUTORES = {
++  adicionar: (a) => store.dispatch('adicionar', a.titulo),
++  alternar: (a) => store.dispatch('alternar', a.id),
++  filtrar: (a) => aplicar({ busca: a.busca, filtro: a.filtro }, { empurrar: true })
++}
++
++async function pedir() {
++  if (!texto.value) {
++    erro.value = 'Escreva o que você quer fazer.'
++    return
++  }
++  controlador?.abort() // só o último pedido vale
++  const meu = new AbortController()
++  controlador = meu
++  carregando.value = true
++  erro.value = ''
++  plano.value = []
++  try {
++    plano.value = await pedirAcoes(texto.value, tarefas.value, meu.signal)
++    if (plano.value.length === 0) erro.value = 'Não encontrei nada que eu possa fazer com esse pedido.'
++  } catch (e) {
++    if (e.name !== 'AbortError') erro.value = 'Não consegui interpretar o pedido.'
++  } finally {
++    if (controlador === meu) carregando.value = false
++  }
++}
++
++function executar(acao) {
++  EXECUTORES[acao.acao](acao)
++  plano.value = plano.value.filter((a) => a !== acao)
++}
++
++function executarTudo() {
++  const lista = [...plano.value]
++  lista.forEach((acao) => EXECUTORES[acao.acao](acao))
++  plano.value = []
++}
++
++function descartar() {
++  plano.value = []
++}
++
++onUnmounted(() => controlador?.abort())
++</script>
++
++<template>
++  <section aria-labelledby="titulo-comandos">
++    <h3 id="titulo-comandos">Assistente de comandos</h3>
++    <form @submit.prevent="pedir" novalidate>
++      <label for="comando">O que você quer fazer?</label>
++      <input
++        id="comando"
++        v-model.trim="texto"
++        placeholder="Ex.: adicione revisar o router e mostre as pendentes"
++      />
++      <button type="submit">Pedir</button>
++    </form>
++
++    <p v-if="carregando" role="status">Pensando…</p>
++    <p v-else-if="erro" role="alert">{{ erro }}</p>
++    <div v-else-if="plano.length">
++      <p>A IA propôs este plano. Nada foi feito ainda:</p>
++      <ul>
++        <li v-for="(acao, i) in plano" :key="i" class="item">
++          <span>{{ descrever(acao, tarefas) }}</span>
++          <button type="button" @click="executar(acao)">Fazer</button>
++        </li>
++      </ul>
++      <button type="button" @click="executarTudo">Fazer tudo</button>
++      <button type="button" @click="descartar">Descartar</button>
++    </div>
++  </section>
++</template>
+--- cp-06/src/services/ia.js
++++ cp-06b/src/services/ia.js
+@@ -1,6 +1,6 @@
+ // Camada de serviço da IA: só fala com o proxy local e valida o que volta.
+ import { sanitizar } from '../utils/sanitizar'
+-import { validarFiltroIA } from '../utils/filtros'
++import { validarAcoes } from '../utils/acoes'
+ 
+ async function post(url, corpo, signal) {
+   const resp = await fetch(url, {
+@@ -18,7 +18,11 @@
+   return sanitizar(dados.passos)
+ }
+ 
+-export async function pedirFiltro(texto, signal) {
+-  const dados = await post('/api/filtrar', { texto }, signal)
+-  return validarFiltroIA(dados)
++// Envia só id, título e situação das tarefas (nada além disso) para a IA saber a que se refere.
++export async function pedirAcoes(texto, tarefas, signal) {
++  const resumo = tarefas
++    .slice(0, 30)
++    .map(({ id, titulo, concluida }) => ({ id, titulo, concluida }))
++  const dados = await post('/api/agir', { texto, tarefas: resumo }, signal)
++  return validarAcoes(dados.acoes, tarefas)
+ }
+--- /dev/null
++++ cp-06b/src/utils/acoes.js
+@@ -0,0 +1,36 @@
++import { ROTULOS, validarFiltroIA } from './filtros'
++
++// A lista PERMITIDA de ações que a IA pode pedir. Tudo que não está aqui é descartado,
++// e cada ação é reconstruída campo a campo: nada que a IA inventar passa adiante.
++export function validarAcoes(lista, tarefas, maximo = 3) {
++  if (!Array.isArray(lista)) return []
++  const ids = new Set(tarefas.map((t) => t.id))
++  const saida = []
++  for (const item of lista) {
++    if (saida.length === maximo) break
++    if (!item || typeof item !== 'object') continue
++
++    if (item.acao === 'adicionar') {
++      const titulo = typeof item.titulo === 'string' ? item.titulo.trim().slice(0, 80) : ''
++      if (titulo) saida.push({ acao: 'adicionar', titulo })
++    } else if (item.acao === 'alternar') {
++      if (Number.isInteger(item.id) && ids.has(item.id)) saida.push({ acao: 'alternar', id: item.id })
++    } else if (item.acao === 'filtrar') {
++      saida.push({ acao: 'filtrar', ...validarFiltroIA(item) })
++    }
++    // Qualquer outra ação (como "remover") é ignorada de propósito.
++  }
++  return saida
++}
++
++// Texto que a pessoa lê antes de aprovar: nada acontece sem esse "ok".
++export function descrever(acao, tarefas) {
++  if (acao.acao === 'adicionar') return `Adicionar a tarefa "${acao.titulo}"`
++  if (acao.acao === 'alternar') {
++    const tarefa = tarefas.find((t) => t.id === acao.id)
++    const hoje = tarefa?.concluida ? 'concluída' : 'pendente'
++    return `Alternar a situação de "${tarefa?.titulo ?? ''}" (hoje: ${hoje})`
++  }
++  const quem = ROTULOS[acao.filtro].toLowerCase()
++  return acao.busca ? `Mostrar ${quem} com "${acao.busca}"` : `Mostrar ${quem}`
++}
+--- cp-06/src/views/ListaView.vue
++++ cp-06b/src/views/ListaView.vue
+@@ -2,7 +2,7 @@
+ import { useStore } from 'vuex'
+ import BasePanel from '../components/BasePanel.vue'
+ import TaskForm from '../components/TaskForm.vue'
+-import BuscaPorIA from '../components/BuscaPorIA.vue'
++import ComandosIA from '../components/ComandosIA.vue'
+ import FiltrosTarefas from '../components/FiltrosTarefas.vue'
+ import ListaTarefas from '../components/ListaTarefas.vue'
+ 
+@@ -12,7 +12,7 @@
+ <template>
+   <BasePanel titulo="Tarefas">
+     <TaskForm @adicionar="store.dispatch('adicionar', $event)" />
+-    <BuscaPorIA />
++    <ComandosIA />
+     <FiltrosTarefas />
+     <ListaTarefas />
+   </BasePanel>
